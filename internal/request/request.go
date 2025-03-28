@@ -2,15 +2,27 @@ package request
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 )
 
-const crlf = "\r\n"
+const (
+	crlf       = "\r\n"
+	bufferSize = 8
+)
+
+type ParserState int
+
+const (
+	initialized ParserState = iota
+	done
+)
 
 type Request struct {
 	RequestLine RequestLine
+	State       ParserState
 }
 
 // GET /coffee HTTP/1.1
@@ -21,33 +33,57 @@ type RequestLine struct {
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
-	rawbytes, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
+	// rawbytes, err := io.ReadAll(reader)
+	input_buffer := make([]byte, bufferSize)
+	readToIndex := 0
+	request := &Request{State: initialized}
+	for request.State != done { // I keep adding data into my buffer
+		if readToIndex >= len(input_buffer) {
+			tmp := make([]byte, len(input_buffer)*2)
+			copy(tmp, input_buffer)
+			input_buffer = tmp
+		}
+		numBytesRead, err := reader.Read(input_buffer[readToIndex:])
+		if err != nil {
+			if errors.Is(io.EOF, err) {
+				request.State = done
+				break
+			}
+			return nil, err
+
+		}
+		readToIndex += numBytesRead
+
+		// in the parser -> parseRequestLine, once I get to crlf I ingest the data.
+		numBytesParsed, err := request.parse(input_buffer[:readToIndex])
+		if err != nil {
+			return nil, err
+		}
+		// Now that I finally ingested the data and parsed it, I purge it.
+		// I just copy starting from what has been read to the end of the slice.
+		// remove that value from my starting index
+		copy(input_buffer, input_buffer[numBytesParsed:])
+		readToIndex -= numBytesParsed
+
 	}
 
-	requestLine, err := parseRequestLine(rawbytes)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Request{
-		RequestLine: *requestLine,
-	}, nil
+	return request, nil
 }
 
-func parseRequestLine(data []byte) (*RequestLine, error) {
+func parseRequestLine(data []byte) (*RequestLine, int, error) {
 	idx := bytes.Index(data, []byte(crlf))
 	if idx == -1 {
-		return nil, fmt.Errorf("could not find CRLF in request-line")
+		// return nil, 0, fmt.Errorf("could not find CRLF in request-line")
+		return nil, 0, nil // no \r\n found yet
 	}
 	requestLineText := string(data[:idx])
 	requestLine, err := requestLineFromString(requestLineText)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return requestLine, nil
+	// +2 to skip the \r\n
+	return requestLine, idx + 2, nil
 }
 
 func requestLineFromString(str string) (*RequestLine, error) {
@@ -81,4 +117,26 @@ func requestLineFromString(str string) (*RequestLine, error) {
 	return &RequestLine{
 		Method: method, RequestTarget: requestTarget, HttpVersion: versionParts[1],
 	}, nil
+}
+
+// accepts next slice of data to go into our request struct
+func (r *Request) parse(data []byte) (int, error) {
+	switch r.State {
+	case initialized:
+		requestLine, bytesConsumed, err := parseRequestLine(data)
+		if err != nil {
+			return 0, fmt.Errorf("could not parse request: %s", err)
+		}
+		if bytesConsumed == 0 {
+			// more data needed
+			return 0, nil
+		}
+		r.RequestLine = *requestLine
+		r.State = done
+		return bytesConsumed, nil
+	case done:
+		return 0, fmt.Errorf("error: trying to read data in a done state")
+	default:
+		return 0, fmt.Errorf("error: unkown state")
+	}
 }
