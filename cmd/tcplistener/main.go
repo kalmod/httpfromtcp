@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"httpfromtcp/internal/request"
 	"net"
 	"os"
 )
@@ -24,11 +25,19 @@ func main() {
 		} else {
 			fmt.Println("~CONNECTION ACCEPTED~")
 		}
-		lines := getLinesChannel(conn)
+		// lines := getLinesChannel(conn)
+		// for line := range lines {
+		// 	fmt.Printf("%s\n", line)
+		// }
 
-		for line := range lines {
-			fmt.Printf("%s\n", line)
+		request, err := request.RequestFromReader(conn)
+		if err != nil {
+			fmt.Println("Error requesting from connection: ", err.Error())
+			os.Exit(1)
 		}
-		fmt.Println("Channel is closed...")
+
+		request.Print()
+
+		fmt.Println("\nChannel is closed...")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"httpfromtcp/internal/headers"
 	"io"
 	"strings"
 )
@@ -16,13 +17,15 @@ const (
 type ParserState int
 
 const (
-	initialized ParserState = iota
-	done
+	requestState_initialized ParserState = iota
+	requestState_parsingHeaders
+	requestState_done
 )
 
 type Request struct {
 	RequestLine RequestLine
 	State       ParserState
+	Headers     headers.Headers
 }
 
 // GET /coffee HTTP/1.1
@@ -36,8 +39,8 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	// rawbytes, err := io.ReadAll(reader)
 	input_buffer := make([]byte, bufferSize)
 	readToIndex := 0
-	request := &Request{State: initialized}
-	for request.State != done { // I keep adding data into my buffer
+	request := &Request{State: requestState_initialized, Headers: headers.NewHeaders()}
+	for request.State != requestState_done { // I keep adding data into my buffer
 		if readToIndex >= len(input_buffer) {
 			tmp := make([]byte, len(input_buffer)*2)
 			copy(tmp, input_buffer)
@@ -46,7 +49,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		numBytesRead, err := reader.Read(input_buffer[readToIndex:])
 		if err != nil {
 			if errors.Is(io.EOF, err) {
-				request.State = done
+				request.State = requestState_done
 				break
 			}
 			return nil, err
@@ -121,8 +124,23 @@ func requestLineFromString(str string) (*RequestLine, error) {
 
 // accepts next slice of data to go into our request struct
 func (r *Request) parse(data []byte) (int, error) {
+	totalBytesParsed := 0
+	for r.State != requestState_done {
+		n, err := r.parseSingle(data[totalBytesParsed:])
+		if err != nil {
+			return 0, err
+		}
+		totalBytesParsed += n
+		if n == 0 {
+			break
+		}
+	}
+	return totalBytesParsed, nil
+}
+
+func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.State {
-	case initialized:
+	case requestState_initialized:
 		requestLine, bytesConsumed, err := parseRequestLine(data)
 		if err != nil {
 			return 0, fmt.Errorf("could not parse request: %s", err)
@@ -132,11 +150,36 @@ func (r *Request) parse(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.RequestLine = *requestLine
-		r.State = done
+		r.State = requestState_parsingHeaders
 		return bytesConsumed, nil
-	case done:
+	case requestState_parsingHeaders:
+		bytesConsumed, done, err := r.Headers.Parse(data)
+		if err != nil {
+			return 0, fmt.Errorf("could not parse headers: %s", err)
+		}
+		if bytesConsumed == 0 {
+			return 0, nil
+		}
+		if done {
+			r.State = requestState_done
+		}
+		return bytesConsumed, nil
+	case requestState_done:
 		return 0, fmt.Errorf("error: trying to read data in a done state")
 	default:
 		return 0, fmt.Errorf("error: unkown state")
+	}
+}
+
+func (r *Request) Print() {
+
+	fmt.Printf("Request line: \n- Method: %s\n- Target: %s\n- Version: %s\n",
+		r.RequestLine.Method,
+		r.RequestLine.RequestTarget,
+		r.RequestLine.HttpVersion)
+
+	fmt.Println("Headers:")
+	for key, val := range r.Headers {
+		fmt.Printf(" - %s: %s\n", key, val)
 	}
 }
