@@ -41,7 +41,7 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 		return 0, false, errors.New("White space found in key.")
 	}
 
-	key = cleanKey(key)
+	// key = cleanKey(key) // moved to within set as set can be called by outside of this parse function
 	val = strings.TrimSpace(val)
 
 	if !validateKey(key) {
@@ -54,6 +54,7 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 }
 
 func (h Headers) Set(key, value string) {
+	key = cleanKey(key)
 	if val, ok := h[key]; ok {
 		if strings.Contains(val, value) { // if value is already in my map
 			return
@@ -62,6 +63,23 @@ func (h Headers) Set(key, value string) {
 	} else {
 		h[key] = value
 	}
+}
+
+// Overwrites instead of appending
+func (h Headers) Override(key, value string) {
+	key = strings.ToLower(key)
+	h[key] = value
+}
+
+// Deletes key/value from map based on key
+func (h Headers) Remove(key string) {
+	key = strings.ToLower(key)
+	delete(h, key)
+}
+
+func (h Headers) Get(key string) (string, bool) {
+	val, ok := h[strings.ToLower(key)]
+	return val, ok
 }
 
 func validateKey(key string) bool {

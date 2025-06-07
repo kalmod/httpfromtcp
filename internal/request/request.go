@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"httpfromtcp/internal/headers"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -19,13 +20,16 @@ type ParserState int
 const (
 	requestState_initialized ParserState = iota
 	requestState_parsingHeaders
+	requestState_parsingBody
 	requestState_done
 )
 
 type Request struct {
-	RequestLine RequestLine
-	State       ParserState
-	Headers     headers.Headers
+	RequestLine    RequestLine
+	State          ParserState
+	Headers        headers.Headers
+	Body           []byte
+	bodyLengthRead int
 }
 
 // GET /coffee HTTP/1.1
@@ -39,7 +43,10 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	// rawbytes, err := io.ReadAll(reader)
 	input_buffer := make([]byte, bufferSize)
 	readToIndex := 0
-	request := &Request{State: requestState_initialized, Headers: headers.NewHeaders()}
+	request := &Request{State: requestState_initialized,
+		Headers: headers.NewHeaders(),
+		Body:    make([]byte, 0),
+	}
 	for request.State != requestState_done { // I keep adding data into my buffer
 		if readToIndex >= len(input_buffer) {
 			tmp := make([]byte, len(input_buffer)*2)
@@ -49,7 +56,9 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		numBytesRead, err := reader.Read(input_buffer[readToIndex:])
 		if err != nil {
 			if errors.Is(io.EOF, err) {
-				request.State = requestState_done
+				if request.State != requestState_done {
+					return nil, fmt.Errorf("incomplete request, in state: %d, read n bytes on EOF: %d", request.State, numBytesRead)
+				}
 				break
 			}
 			return nil, err
@@ -161,9 +170,30 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, nil
 		}
 		if done {
-			r.State = requestState_done
+			r.State = requestState_parsingBody
 		}
 		return bytesConsumed, nil
+	case requestState_parsingBody:
+		content_length_val, ok := r.Headers.Get("Content-length")
+		if !ok {
+			r.State = requestState_done
+			return len(data), nil
+		}
+		content_length, err := strconv.Atoi(content_length_val)
+		if err != nil {
+			return 0, fmt.Errorf("Malformed Content-length: %v\n\t%v", content_length_val, err)
+		}
+
+		r.Body = append(r.Body, data...)
+		r.bodyLengthRead += len(data)
+		if r.bodyLengthRead > content_length {
+			return 0, fmt.Errorf("Content-length too larger")
+		}
+
+		if content_length == r.bodyLengthRead {
+			r.State = requestState_done
+		}
+		return len(data), nil
 	case requestState_done:
 		return 0, fmt.Errorf("error: trying to read data in a done state")
 	default:
@@ -182,4 +212,6 @@ func (r *Request) Print() {
 	for key, val := range r.Headers {
 		fmt.Printf(" - %s: %s\n", key, val)
 	}
+
+	fmt.Printf("Body:\n%v\n", string(r.Body))
 }
