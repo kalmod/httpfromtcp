@@ -53,6 +53,7 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	return (idx + 2), false, nil
 }
 
+// Adds to headers, but appends if header already exists
 func (h Headers) Set(key, value string) {
 	key = cleanKey(key)
 	if val, ok := h[key]; ok {

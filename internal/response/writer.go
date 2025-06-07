@@ -95,6 +95,13 @@ func (w *Writer) WriteChunkedBodyDone() (int, error) {
 		return 0, fmt.Errorf("ResponseWriter not ready to write to body > %v", w.WriterState)
 	}
 	defer func() { w.WriterState = WriteFinished }()
-	chunkedEnd := []byte("0\r\n\r\n")
+	chunkedEnd := []byte("0\r\n")
 	return w.writer.Write(chunkedEnd)
+}
+
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+	if w.WriterState != WriteFinished {
+		return fmt.Errorf("ResponseWriter not ready to write trailers > %v", w.WriterState)
+	}
+	return WriteHeaders(w.writer, h)
 }

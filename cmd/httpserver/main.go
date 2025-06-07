@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"httpfromtcp/internal/headers"
 	"httpfromtcp/internal/request"
 	"httpfromtcp/internal/response"
 	"httpfromtcp/internal/server"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -59,11 +62,39 @@ func test_handler(w *response.Writer, req *request.Request) {
 		handler500(w, req)
 		return
 	}
+	if req.RequestLine.RequestTarget == "/video" {
+		handlerVideo(w, req)
+		return
+	}
 	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin/") {
 		handlerHTTPBIN(w, req)
 		return
 	}
 	handler200(w, req)
+	return
+}
+
+func handlerVideo(w *response.Writer, req *request.Request) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println(err)
+		handler500(w, req)
+		return
+	}
+
+	filePath := filepath.Join(homeDir, "Code", "bootdev", "httpfromtcp", "assets", "vim.mp4")
+
+	videoFile, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Println(err)
+		handler500(w, req)
+		return
+	}
+	w.WriteStatusLine(response.StatusCodeSuccess)
+	h := response.GetDefaultHeaders(len(videoFile))
+	h.Override("Content-Type", "video/mp4")
+	w.WriteHeaders(h)
+	w.WriteBody(videoFile)
 	return
 }
 
@@ -83,16 +114,21 @@ func handlerHTTPBIN(w *response.Writer, req *request.Request) {
 	h := response.GetDefaultHeaders(0)
 	h.Override("Transfer-Encoding", "chunked")
 	h.Remove("Content-Length") // chaning length and setting encoding
+	h.Set("Trailer", "X-Content-SHA256")
+	h.Set("Trailer", "X-Content-Length")
+
 	w.WriteHeaders(h)
 
 	const maxChunkSize = 1024
 	buf := make([]byte, maxChunkSize)
 
 	fmt.Println("Starting to read from: ", routed_target)
+	totalResponseBody := []byte{}
 	for {
 		n, err := http_resp.Body.Read(buf)
 		fmt.Println("\t", n, "- bytes, read from httpbin")
 		if n > 0 {
+			totalResponseBody = append(totalResponseBody, buf[:n]...)
 			_, err = w.WriteChunkedBody(buf)
 			if err != nil {
 				fmt.Println("WriteChunkedBody ERROR: ", err)
@@ -113,7 +149,14 @@ func handlerHTTPBIN(w *response.Writer, req *request.Request) {
 	if err != nil {
 		fmt.Println("Error writing chunked body done:", err)
 	}
-
+	trailers := headers.NewHeaders()
+	shaSum := sha256.Sum256(totalResponseBody)
+	trailers.Override("X-Content-SHA256", fmt.Sprintf("%x", shaSum[:]))
+	trailers.Override("X-Content-Length", fmt.Sprintf("%d", len(totalResponseBody)))
+	err = w.WriteTrailers(trailers)
+	if err != nil {
+		fmt.Println("\tError writing trailers: ", err)
+	}
 	fmt.Println("Finished reading from: ", routed_target)
 	return
 

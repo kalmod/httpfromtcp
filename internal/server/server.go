@@ -64,6 +64,20 @@ func (s *Server) listen() {
 	}
 }
 
+func (s *Server) handle(conn net.Conn) {
+	defer conn.Close()
+	req, err := request.RequestFromReader(conn)
+	w := response.NewWriter(conn)
+	if err != nil {
+		w.WriteStatusLine(response.StatusCodeInternalServerError)
+		w.WriteHeaders(response.GetDefaultHeaders(0))
+		w.WriteBody([]byte(fmt.Sprintf("Error parsing request: %v", err)))
+		return
+	}
+	s.handler(w, req)
+	return
+}
+
 // Handles a single connection by writing the following response and closing the connection.
 // func (s *Server) handle(conn net.Conn) {
 // 	defer conn.Close()
@@ -91,17 +105,3 @@ func (s *Server) listen() {
 // 	return
 // }
 //
-
-func (s *Server) handle(conn net.Conn) {
-	defer conn.Close()
-	req, err := request.RequestFromReader(conn)
-	w := response.NewWriter(conn)
-	if err != nil {
-		w.WriteStatusLine(response.StatusCodeInternalServerError)
-		w.WriteHeaders(response.GetDefaultHeaders(0))
-		w.WriteBody([]byte(fmt.Sprintf("Error parsing request: %v", err)))
-		return
-	}
-	s.handler(w, req)
-	return
-}
